@@ -1,7 +1,5 @@
-import "package:path/path.dart";
-import "package:sqflite/sqflite.dart";
-import "../utils.dart" as utils;
 import "appointments_model.dart";
+import "package:supabase_flutter/supabase_flutter.dart";
 
 
 /// Classe que provê acesso ao banco de dados para gerenciar compromissos.
@@ -11,42 +9,6 @@ class AppointmentsDBWorker {
   AppointmentsDBWorker._();
   static final AppointmentsDBWorker db = AppointmentsDBWorker._();
 
-  /// The one and only database instance.
-  Database? _db;
-
-  /// Get singleton instance, create if not available yet.
-  ///
-  /// @return The one and only Database instance.
-  Future<Database> get database async {
-    if (_db == null) {
-      _db = await init();
-    }
-    print("## appointments AppointmentsDBWorker.get-database(): _db = $_db");
-    return _db!;
-  }
-
-  /// Initialize database.
-  ///
-  /// @return A Database instance.
-  Future<Database> init() async {
-    String path = join(utils.docsDir.path, "appointments.db");
-    print("## appointments AppointmentsDBWorker.init(): path = $path");
-    Database db = await openDatabase(path, version : 1, onOpen : (db) { },
-      onCreate : (Database inDB, int inVersion) async {
-        await inDB.execute(
-          "CREATE TABLE IF NOT EXISTS appointments ("
-            "id INTEGER PRIMARY KEY,"
-            "title TEXT,"
-            "description TEXT,"
-            "apptDate TEXT,"
-            "apptTime TEXT"
-          ")"
-        );
-      }
-    );
-    return db;
-  }
-
   /// Create a Appointment from a Map.
   Appointment appointmentFromMap(Map inMap) {
     print("## appointments AppointmentsDBWorker.appointmentFromMap(): inMap = $inMap");
@@ -54,8 +16,11 @@ class AppointmentsDBWorker {
       id: inMap["id"],
       title: inMap["title"],
       description: inMap["description"],
-      apptDate: inMap["apptDate"],
-      apptTime: inMap["apptTime"]
+      apptDate: inMap["appt_date"],
+      apptTime: inMap["appt_time"],
+      createdBy: inMap["created_by"],
+      sharedWith: inMap["shared_with"],
+      status: inMap["status"]
     );
     print("## appointments AppointmentsDBWorker.appointmentFromMap(): appointment = $appointment");
     return appointment;
@@ -68,8 +33,11 @@ class AppointmentsDBWorker {
     map["id"] = inAppointment.id;
     map["title"] = inAppointment.title;
     map["description"] = inAppointment.description;
-    map["apptDate"] = inAppointment.apptDate;
-    map["apptTime"] = inAppointment.apptTime;
+    map["appt_date"] = inAppointment.apptDate;
+    map["appt_time"] = inAppointment.apptTime;
+    map["created_by"] = inAppointment.createdBy;
+    map["shared_with"] = inAppointment.sharedWith;
+    map["status"] = inAppointment.status;
     print("## appointments AppointmentsDBWorker.appointmentToMap(): map = $map");
     return map;
   }
@@ -77,48 +45,46 @@ class AppointmentsDBWorker {
   /// Create a appointment.
   ///
   /// @param inAppointment the Appointment object to create.
-  Future create(Appointment inAppointment) async {
+  Future create(Appointment inAppointment, String? otherUser) async {
     print("## appointments AppointmentsDBWorker.create(): inAppointment = $inAppointment");
-    Database db = await database;
-
-    // Get largest current id in the table, plus one, to be the new ID.
-    List val = await db.rawQuery("SELECT MAX(id) + 1 AS id FROM appointments");
-    var id = val.first["id"];
-    if (id == null) { id = 1; }
-
-    // Insert into table.
-    return await db.rawInsert(
-      "INSERT INTO appointments (id, title, description, apptDate, apptTime) VALUES (?, ?, ?, ?, ?)",
-      [
-        id,
-        inAppointment.title,
-        inAppointment.description,
-        inAppointment.apptDate,
-        inAppointment.apptTime
-      ]
-    );
+    final supabase = Supabase.instance.client;
+    final userId = supabase.auth.currentUser?.id;
+    return await supabase.from('appointments').insert({
+      'title': inAppointment.title,
+      'description': inAppointment.description,
+      'appt_date': inAppointment.apptDate,
+      'appt_time': inAppointment.apptTime,
+      'created_by': userId,
+      'shared_with': otherUser,
+      'status': otherUser != null ? 'accepted' : null,
+    }).select();
   }
 
   /// Get a specific appointment.
   ///
   /// @param  inID The ID of the appointment to get.
   /// @return      The corresponding Appointment object.
-  Future<Appointment> get(int inID) async {
+  Future<Appointment> get(String inID) async {
     print("## appointments AppointmentsDBWorker.get(): inID = $inID");
-
-    Database db = await database;
-    var rec = await db.query("appointments", where : "id = ?", whereArgs : [ inID ]);
-    print("## appointments AppointmentsDBWorker.get(): rec.first = $rec.first");
-    return appointmentFromMap(rec.first);
+    final response = await Supabase.instance.client
+        .from('appointments')
+        .select()
+        .eq('id', inID)
+        .single();
+    print("## appointments AppointmentsDBWorker.get(): $response");
+    return appointmentFromMap(response);
   }
 
   /// Get all appointments.
   ///
   /// @return A List of Appointment objects.
-  Future<List> getAll() async {
-    Database db = await database;
-    var recs = await db.query("appointments");
-    var list = recs.isNotEmpty ? recs.map((m) => appointmentFromMap(m)).toList() : [ ];
+  Future<List<Appointment>> getAll() async {
+    final userId = Supabase.instance.client.auth.currentUser?.id;
+    final response = await Supabase.instance.client
+        .from('appointments')
+        .select()
+        .or('created_by.eq.$userId,shared_with.eq.$userId');
+    var list = response.map<Appointment>((a) => appointmentFromMap(a)).toList();
     print("## appointments AppointmentsDBWorker.getAll(): list = $list");
     return list;
   }
@@ -128,19 +94,25 @@ class AppointmentsDBWorker {
   /// @param inAppointment The appointment to update.
   Future update(Appointment inAppointment) async {
     print("## appointments AppointmentsDBWorker.update(): inAppointment = $inAppointment");
-    Database db = await database;
-    return await db.update(
-      "appointments", appointmentToMap(inAppointment), where : "id = ?", whereArgs : [ inAppointment.id ]
-    );
+    final supabase = Supabase.instance.client;
+    return await supabase.from('appointments').update({
+      'title': inAppointment.title,
+      'description': inAppointment.description,
+      'appt_date': inAppointment.apptDate,
+      'appt_time': inAppointment.apptTime,
+    }).eq('id', inAppointment.id!);
   }
 
   /// Delete a appointment.
   ///
   /// @param inID The ID of the appointment to delete.
-  Future delete(int inID) async {
+  Future delete(String inID) async {
     print("## appointments AppointmentsDBWorker.delete(): inID = $inID");
-    Database db = await database;
-    return await db.delete("appointments", where : "id = ?", whereArgs : [ inID ]);
+    return await Supabase.instance.client
+        .from('appointments')
+        .delete()
+        .eq('id', inID);
   }
+
 
 }

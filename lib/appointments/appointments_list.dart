@@ -12,26 +12,22 @@ import "appointments_model.dart";
 class AppointmentsList extends StatelessWidget {
   Widget build(BuildContext context) {
     print("## AppointmentsList.build()");
-    AppointmentsModel model = Provider.of<AppointmentsModel>(context);
+    AppointmentsModel model = Provider.of<AppointmentsModel>(context, listen: false);
 
-    return FutureBuilder<List<Appointment>>(
-        future: getAcceptedAppointments(),
-        builder: (context, snapshot) {
-          final acceptedFromSupabase = snapshot.data ?? [];
-          final List<Appointment> allAppointments = [...model.entityList, ...acceptedFromSupabase];
-          print("allAppointments: ${allAppointments.length}");
-          EventList<Event> _markedDateMap = EventList(events: {});
-          for (int i = 0; i < allAppointments.length; i++) {
-            Appointment appointment = allAppointments[i];
-            List dateParts = appointment.apptDate.split(",");
-            DateTime apptDate = DateTime(int.parse(dateParts[0]),
-                int.parse(dateParts[1]), int.parse(dateParts[2]));
-            _markedDateMap.add(
-              apptDate, Event(date : apptDate,
-                icon : Container(decoration : BoxDecoration(color : Colors.blue)))
-            );
-          }
+    EventList<Event> _markedDateMap = EventList(events: {});
+    for (int i = 0; i < model.entityList.length; i++) {
+      Appointment appointment = model.entityList[i];
+      List dateParts = appointment.apptDate.split(",");
+      DateTime apptDate = DateTime(int.parse(dateParts[0]),
+          int.parse(dateParts[1]), int.parse(dateParts[2]));
+      _markedDateMap.add(
+          apptDate, Event(date : apptDate,
+          icon : Container(decoration : BoxDecoration(color : Colors.blue)))
+      );
+    }
 
+    return Consumer<AppointmentsModel>(
+        builder: (context, model, child) {
           return Scaffold(
             floatingActionButton: FloatingActionButton(
               child: Icon(Icons.add, color: Colors.white),
@@ -58,22 +54,26 @@ class AppointmentsList extends StatelessWidget {
                         daysHaveCircularBorder: false,
                         markedDatesMap: _markedDateMap,
                         onDayPressed: (DateTime inDate, List<Event> inEvents) {
-                          _showAppointments(inDate, context, allAppointments);
+                          _showAppointments(inDate, context);
                         }),
                   ),
                 ),
               ],
             ),
-        );
-      }
+          );
+        }
     );
   }
 
-  void _showAppointments(DateTime inDate, BuildContext inContext, List<Appointment> appointments) async {
+  /// Show a bottom sheet to see the appointments for the selected day.
+  ///
+  /// @param inDate    The date selected.
+  /// @param inContext The build context of the parent widget.
+  void _showAppointments(DateTime inDate, BuildContext inContext) async {
     AppointmentsModel model = Provider.of<AppointmentsModel>(inContext, listen:false);
-
+    final String? currentUserId = Supabase.instance.client.auth.currentUser?.id;
     print(
-      "## AppointmentsList._showAppointments(): inDate = $inDate (${inDate.year},${inDate.month},${inDate.day})"
+        "## AppointmentsList._showAppointments(): inDate = $inDate (${inDate.year},${inDate.month},${inDate.day})"
     );
     print("## AppointmentsList._showAppointments(): appointmentsModel.entityList.length = "
         "${model.entityList.length}");
@@ -81,79 +81,82 @@ class AppointmentsList extends StatelessWidget {
         "${model.entityList}");
 
     showModalBottomSheet(
-      context : inContext,
-      builder : (BuildContext context) {
-            return Scaffold(
+        context : inContext,
+        builder : (BuildContext context) {
+          return Scaffold(
               body : Container(
-                child : Padding(
-                  padding : EdgeInsets.all(10),
-                  child : GestureDetector(
-                    child : Column(
-                      children : [
-                        Text(
-                          DateFormat.yMMMMd("en_US").format(inDate.toLocal()),
-                          textAlign : TextAlign.center,
-                          style : TextStyle(color : Theme.of(context).colorScheme.primary, fontSize : 24)
-                        ),
-                        Divider(),
-                        Expanded(
-                          child : ListView.builder(
-                            itemCount : appointments.length,
-                            itemBuilder : (BuildContext inBuildContext, int inIndex) {
-                              Appointment appointment = appointments[inIndex];
-                              print("## AppointmentsList._showAppointments().ListView.builder(): "
-                                "appointment = $appointment");
-                              if (appointment.apptDate != "${inDate.year},${inDate.month},${inDate.day}") {
-                                return Container(height : 0);
-                              }
-                              print("## AppointmentsList._showAppointments().ListView.builder(): "
-                                "INCLUDING appointment = $appointment");
-                              String apptTime = "";
-                              if (appointment.apptTime != null) {
-                                List timeParts = appointment.apptTime!.split(",");
-                                TimeOfDay at = TimeOfDay(
-                                  hour : int.parse(timeParts[0]), minute : int.parse(timeParts[1])
-                                );
-                                apptTime = " (${at.format(context)})";
-                              }
-                              return Slidable(
-                                key: ValueKey(appointment.id),
-                                endActionPane: ActionPane(
-                                  motion: ScrollMotion(),
-                                  extentRatio: 0.25,
-                                  children: [
-                                    SlidableAction(
-                                      onPressed: (context) => _deleteAppointment(inBuildContext, appointment, model),
-                                      backgroundColor: Colors.red,
-                                      foregroundColor: Colors.white,
-                                      icon: Icons.delete,
-                                      label: 'Delete',
-                                    ),
-                                  ],
+                  child : Padding(
+                      padding : EdgeInsets.all(10),
+                      child : GestureDetector(
+                          child : Column(
+                              children : [
+                                Text(
+                                    DateFormat.yMMMMd("en_US").format(inDate.toLocal()),
+                                    textAlign : TextAlign.center,
+                                    style : TextStyle(color : Theme.of(context).colorScheme.primary, fontSize : 24)
                                 ),
-                                child: Container(
-                                  margin: EdgeInsets.only(bottom: 8),
-                                  color: Colors.grey.shade300,
-                                  child: ListTile(
-                                    title: Text("${appointment.title}$apptTime"),
-                                    subtitle: Text(appointment.description),
-                                    onTap: () async {
-                                      _editAppointment(context, appointment, model);
-                                    },
-                                  ),
-                                ),
-                              );
-                            }
+                                Divider(),
+                                Expanded(
+                                    child : ListView.builder(
+                                        itemCount : model.entityList.length,
+                                        itemBuilder : (BuildContext inBuildContext, int inIndex) {
+                                          Appointment appointment = model.entityList[inIndex];
+                                          print("## AppointmentsList._showAppointments().ListView.builder(): "
+                                              "appointment = $appointment");
+                                          if (appointment.apptDate != "${inDate.year},${inDate.month},${inDate.day}") {
+                                            return Container(height : 0);
+                                          }
+                                          print("## AppointmentsList._showAppointments().ListView.builder(): "
+                                              "INCLUDING appointment = $appointment");
+                                          String apptTime = "";
+                                          if (appointment.apptTime != null) {
+                                            List timeParts = appointment.apptTime!.split(",");
+                                            TimeOfDay at = TimeOfDay(
+                                                hour : int.parse(timeParts[0]), minute : int.parse(timeParts[1])
+                                            );
+                                            apptTime = " (${at.format(context)})";
+                                          }
+                                          bool isOwner = appointment.createdBy == currentUserId;
+                                          return Slidable(
+                                            key: ValueKey(appointment.id),
+                                            endActionPane: isOwner
+                                              ? ActionPane(
+                                              motion: ScrollMotion(),
+                                              extentRatio: 0.25,
+                                              children: [
+                                                SlidableAction(
+                                                  onPressed: (context) => _deleteAppointment(inBuildContext, appointment, model),
+                                                  backgroundColor: Colors.red,
+                                                  foregroundColor: Colors.white,
+                                                  icon: Icons.delete,
+                                                  label: 'Delete',
+                                                ),
+                                              ],
+                                            )
+                                            : null,
+                                            child: Container(
+                                              margin: EdgeInsets.only(bottom: 8),
+                                              color: Colors.grey.shade300,
+                                              child: ListTile(
+                                                title: Text("${appointment.title}$apptTime"),
+                                                subtitle: Text(appointment.description),
+                                                onTap: () async {
+                                                  _editAppointment(context, appointment, model);
+                                                },
+                                              ),
+                                            ),
+                                          );
+                                        }
+                                    )
+                                )
+                              ]
                           )
-                        )
-                      ]
-                    )
+                      )
                   )
-                )
               )
-            );
-          }
-        );
+          );
+        }
+    );
   }
 
   /// Handle taps on an appointment to trigger editing.
@@ -168,10 +171,10 @@ class AppointmentsList extends StatelessWidget {
     } else {
       List dateParts = inModel.entityBeingEdited.apptDate.split(",");
       DateTime apptDate = DateTime(
-        int.parse(dateParts[0]), int.parse(dateParts[1]), int.parse(dateParts[2])
+          int.parse(dateParts[0]), int.parse(dateParts[1]), int.parse(dateParts[2])
       );
       inModel.setChosenDate(
-        DateFormat.yMMMMd("en_US").format(apptDate.toLocal())
+          DateFormat.yMMMMd("en_US").format(apptDate.toLocal())
       );
     }
     if (inModel.entityBeingEdited.apptTime == null) {
@@ -179,7 +182,7 @@ class AppointmentsList extends StatelessWidget {
     } else {
       List timeParts = inModel.entityBeingEdited.apptTime.split(",");
       TimeOfDay apptTime = TimeOfDay(
-        hour : int.parse(timeParts[0]), minute : int.parse(timeParts[1])
+          hour : int.parse(timeParts[0]), minute : int.parse(timeParts[1])
       );
       inModel.setApptTime(apptTime.format(inContext));
     }
@@ -195,59 +198,40 @@ class AppointmentsList extends StatelessWidget {
   Future _deleteAppointment(BuildContext inContext, Appointment inAppointment, AppointmentsModel inModel) async {
     print("## AppointmentsList._deleteAppointment(): inAppointment = $inAppointment");
     return showDialog(
-      context : inContext,
-      barrierDismissible : false,
-      builder : (BuildContext inAlertContext) {
-        return AlertDialog(
-          title : Text("Delete Appointment"),
-          content : Text("Are you sure you want to delete ${inAppointment.title}?"),
-          actions : [
-            ElevatedButton(child : Text("Cancel"),
-              onPressed: () {
-                //Apenas omite a janela
-                Navigator.of(inAlertContext).pop();
-              }
-            ),
-            ElevatedButton(child : Text("Delete"),
-              onPressed : () async {
-                // Remove da base de dados, omite a caixa de diálogo, exibe mensagem informando a remoção e recarrega a listagem
-                await AppointmentsDBWorker.db.delete(inAppointment.id!);
-                Navigator.of(inAlertContext).pop();
-                ScaffoldMessenger.of(inContext).showSnackBar(
-                  SnackBar(
-                    backgroundColor : Colors.red,
-                    duration : Duration(seconds : 2),
-                    content : Text("Appointment deleted")
-                  )
-                );
-                // Atualiza a listagem de compromissos
-                inModel.loadData("appointments", AppointmentsDBWorker.db);
-              }
-            )
-          ]
-        );
-      }
+        context : inContext,
+        barrierDismissible : false,
+        builder : (BuildContext inAlertContext) {
+          return AlertDialog(
+              title : Text("Delete Appointment"),
+              content : Text("Are you sure you want to delete ${inAppointment.title}?"),
+              actions : [
+                ElevatedButton(child : Text("Cancel"),
+                    onPressed: () {
+                      //Apenas omite a janela
+                      Navigator.of(inAlertContext).pop();
+                    }
+                ),
+                ElevatedButton(child : Text("Delete"),
+                    onPressed : () async {
+                      // Remove da base de dados, omite a caixa de diálogo, exibe mensagem informando a remoção e recarrega a listagem
+                      await AppointmentsDBWorker.db.delete(inAppointment.id!);
+                      Navigator.of(inAlertContext).pop();
+                      ScaffoldMessenger.of(inContext).showSnackBar(
+                          SnackBar(
+                              backgroundColor : Colors.red,
+                              duration : Duration(seconds : 2),
+                              content : Text("Appointment deleted")
+                          )
+                      );
+                      // Atualiza a listagem de compromissos
+                      inModel.loadData("appointments", AppointmentsDBWorker.db);
+                    }
+                )
+              ]
+          );
+        }
     );
   }
 
-  Future<List<Appointment>> getAcceptedAppointments() async {
-    final userId = Supabase.instance.client.auth.currentUser?.id;
-    final response = await Supabase.instance.client
-        .from('appointments')
-        .select()
-        .or('created_by.eq.$userId,shared_with.eq.$userId')
-        .eq('status', 'accepted');
-
-    return response.map<Appointment>((e) {
-      final a = e['appointments'];
-      return Appointment(
-        id: a['id'],
-        title: a['title'],
-        description: a['description'],
-        apptDate: a['appt_date'],
-        apptTime: a['appt_time'],
-      );
-    }).toList();
-  }
 
 }

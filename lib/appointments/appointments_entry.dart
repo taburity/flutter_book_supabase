@@ -6,25 +6,34 @@ import '../utils.dart' as utils;
 import 'appointments_dbworker.dart';
 import 'appointments_model.dart';
 
-class AppointmentsEntry extends StatelessWidget {
+class AppointmentsEntry extends StatefulWidget {
+  @override
+  _AppointmentsEntryState createState() => _AppointmentsEntryState();
+}
 
+class _AppointmentsEntryState extends State<AppointmentsEntry> {
   final TextEditingController _titleEditingController = TextEditingController();
   final TextEditingController _descriptionEditingController = TextEditingController();
   final GlobalKey<FormState> _formKey = GlobalKey<FormState>();
 
+  String? _selectedReceiverId;
+  String? _selectedReceiverName;
+
   @override
   Widget build(BuildContext context) {
     print("## AppointmentsEntry.build()");
+    bool isNew = false;
     return Consumer<AppointmentsModel>(
-
       builder: (context, model, child) {
         if (model.entityBeingEdited != null) {
           _titleEditingController.text = model.entityBeingEdited.title;
           _descriptionEditingController.text = model.entityBeingEdited.description;
+          if(model.entityBeingEdited.id==null){
+            isNew = true;
+          }
         }
 
         return Scaffold(
-
           bottomNavigationBar: Padding(
             padding: EdgeInsets.symmetric(vertical: 0, horizontal: 10),
             child: Row(
@@ -39,7 +48,7 @@ class AppointmentsEntry extends StatelessWidget {
                 Spacer(),
                 ElevatedButton(
                   child: Text("Save"),
-                  onPressed: () { _save(context, model); },
+                  onPressed: () => _save(context, model),
                 ),
               ],
             ),
@@ -53,11 +62,10 @@ class AppointmentsEntry extends StatelessWidget {
                   title: TextFormField(
                     decoration: InputDecoration(hintText: "Title"),
                     controller: _titleEditingController,
-                    onChanged: (String? inValue){
-                      model.entityBeingEdited.title = _titleEditingController.text;
-                    },
-                    validator: (String? inValue) {
-                      if (inValue!.isEmpty) {
+                    onChanged: (inValue) =>
+                    model.entityBeingEdited.title = _titleEditingController.text,
+                    validator: (inValue) {
+                      if (inValue == null || inValue.isEmpty) {
                         return "Please enter a title";
                       }
                       return null;
@@ -71,9 +79,8 @@ class AppointmentsEntry extends StatelessWidget {
                     maxLines: 4,
                     decoration: InputDecoration(hintText: "Description"),
                     controller: _descriptionEditingController,
-                    onChanged: (String? inValue){
-                      model.entityBeingEdited.description = inValue;
-                    },
+                    onChanged: (inValue) =>
+                    model.entityBeingEdited.description = inValue,
                   ),
                 ),
                 ListTile(
@@ -88,7 +95,7 @@ class AppointmentsEntry extends StatelessWidget {
                         context, model, model.entityBeingEdited.apptDate,
                       );
                       model.entityBeingEdited.apptDate = chosenDate;
-                      },
+                    },
                   ),
                 ),
                 ListTile(
@@ -101,6 +108,22 @@ class AppointmentsEntry extends StatelessWidget {
                     onPressed: () => _selectTime(context, model),
                   ),
                 ),
+                if (isNew)
+                  ListTile(
+                    leading: Icon(Icons.person_add),
+                    title: Text("Share with"),
+                    subtitle: Text(_selectedReceiverName ?? "Tap to choose"),
+                    trailing: Icon(Icons.arrow_drop_down),
+                    onTap: () async {
+                      final result = await _askForReceiver(context);
+                      if (result != null) {
+                        setState(() {
+                          _selectedReceiverId = result['id'];
+                          _selectedReceiverName = result['full_name'];
+                        });
+                      }
+                    },
+                  ),
               ],
             ),
           ),
@@ -126,56 +149,33 @@ class AppointmentsEntry extends StatelessWidget {
   void _save(BuildContext inContext, AppointmentsModel inModel) async {
     final supabase = Supabase.instance.client;
     final userId = supabase.auth.currentUser?.id;
-    final responseSupabase;
 
     //O compromisso não será salvo se as entradas do formulário não forem validadas
     if (!_formKey.currentState!.validate()) return;
 
-    //Um novo compromisso foi criado
-    if (inModel.entityBeingEdited.id == null) {
-      await AppointmentsDBWorker.db.create(inModel.entityBeingEdited);
+    final isNew = inModel.entityBeingEdited.id == null;
+    final response;
 
-      //Salva no supabase
-      responseSupabase = await supabase.from('appointments').insert({
-        'title': inModel.entityBeingEdited.title,
-        'description': inModel.entityBeingEdited.description,
-        'appt_date': inModel.entityBeingEdited.apptDate,
-        'appt_time': inModel.entityBeingEdited.apptTime,
-        'created_by': userId,
-      });
-
-    //Um compromisso existente está sendo atualizado
+    if (isNew) {
+      response = await AppointmentsDBWorker.db.create(inModel.entityBeingEdited,
+          _selectedReceiverId);
     } else {
-      await AppointmentsDBWorker.db.update(inModel.entityBeingEdited);
-      //Atualiza no supabase
-      responseSupabase = await supabase.from('appointments').update({
-        'title': inModel.entityBeingEdited.title,
-        'description': inModel.entityBeingEdited.description,
-        'appt_date': inModel.entityBeingEdited.apptDate,
-        'appt_time': inModel.entityBeingEdited.apptTime,
-      }).eq('id', inModel.entityBeingEdited.id);
-
+      response = await AppointmentsDBWorker.db.update(inModel.entityBeingEdited);
+    }
+    if (_selectedReceiverId != null && response.isNotEmpty) {
+      print("Appointment shared with ${_selectedReceiverName}");
     }
 
-    //Compartilhar o compromisso
-    final appointmentId = responseSupabase.data['id'];
-    final receiverId = await _askForReceiver(inContext);
-    if (receiverId != null) {
-      await shareAppointment(appointmentId, receiverId);
-    }
-
-    //Atualizar a listagem de compromissos
-    inModel.loadData("appointments", AppointmentsDBWorker.db);
-
-    //Limpar os controladores
+    inModel.loadData("appointments", null);
     _titleEditingController.clear();
     _descriptionEditingController.clear();
+    _selectedReceiverId = null;
+    _selectedReceiverName = null;
 
     // Retornar para a listagem de compromissos
     inModel.setStackIndex(0);
 
-    // Informar o usuário que o novo compromisso foi salvo
-    ScaffoldMessenger.of(inContext).showSnackBar(
+    ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         backgroundColor: Colors.green,
         duration: Duration(seconds: 2),
@@ -184,72 +184,55 @@ class AppointmentsEntry extends StatelessWidget {
     );
   }
 
-  Future<String?> _askForReceiver(BuildContext context) async {
+  Future<Map<String, String>?> _askForReceiver(BuildContext context) async {
     final supabase = Supabase.instance.client;
+    final currentUserId = supabase.auth.currentUser!.id;
+
     final data = await supabase
         .from('profiles')
         .select('id, full_name')
-        .neq('id', supabase.auth.currentUser!.id)
-        .order('full_name')
-        .then((response) => response as List<dynamic>);
+        .neq('id', currentUserId)
+        .order('full_name');
+    print("DATA: ${data.length}");
 
-    List<Map<String, String>> users = data.map((user) => {
-      'id': user['user_id'] as String,
-      'full_name': user['full_name'] as String,
-    }).toList();
-
-    String? selectedUserId;
-    await showDialog(
-      context: context,
-      builder: (context) {
-        return AlertDialog(
-          title: Text("Share Appointment"),
-          content: SizedBox(
-            width: double.maxFinite,
-            child: ListView.builder(
-              shrinkWrap: true,
-              itemCount: users.length,
-              itemBuilder: (context, index) {
-                final user = users[index];
-                return ListTile(
-                  title: Text(user['full_name'] ?? 'Unknown'),
-                  onTap: () {
-                    selectedUserId = user['id'];
-                    Navigator.of(context).pop();
-                  },
-                );
-              },
-            ),
-          ),
-          actions: [
-            TextButton(
-              child: Text("Cancel"),
-              onPressed: () => Navigator.of(context).pop(),
-            ),
-          ],
-        );
-      },
+    final List<Map<String, String>> users = List<Map<String, String>>.from(
+      data.map((user) => {
+        'id': user['id'] as String,
+        'full_name': user['full_name'] as String,
+      }),
     );
 
-    return selectedUserId;
+    Map<String, String>? selectedUser;
+    await showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text("Share Appointment"),
+        content: SizedBox(
+          width: double.maxFinite,
+          child: ListView.builder(
+            shrinkWrap: true,
+            itemCount: users.length,
+            itemBuilder: (context, index) {
+              final user = users[index];
+              return ListTile(
+                title: Text(user['full_name'] ?? 'Unknown'),
+                onTap: () {
+                  selectedUser = user;
+                  Navigator.of(context).pop();
+                },
+              );
+            },
+          ),
+        ),
+        actions: [
+          TextButton(
+            child: Text("Cancel"),
+            onPressed: () => Navigator.of(context).pop(),
+          ),
+        ],
+      ),
+    );
+
+    return selectedUser;
   }
-
-  Future<void> shareAppointment(String appointmentId, String receiverUserId) async {
-    final supabase = Supabase.instance.client;
-
-    final response = await supabase
-        .from('appointments')
-        .update({
-      'shared_with': receiverUserId,
-      'status': 'pending'
-    })
-        .match({'id': appointmentId});
-
-    if (response.error != null) {
-      print("Erro ao compartilhar: ${response.error!.message}");
-    } else {
-      print("Compromisso compartilhado com sucesso!");
-    }
-  }
-
 }

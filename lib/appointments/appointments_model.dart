@@ -1,13 +1,17 @@
 import "../base_model.dart";
+import "appointments_dbworker.dart";
 
 
 ///Uma classe que representa um compromisso.
 class Appointment {
-  int? id;
+  String? id;
   String title;
   String description;
   String apptDate; // YYYY,MM,DD
   String? apptTime; // HH,MM
+  String? createdBy;
+  String? sharedWith;
+  String? status;
 
   Appointment({
     this.id,
@@ -15,6 +19,9 @@ class Appointment {
     required this.description,
     required this.apptDate,
     this.apptTime,
+    this.createdBy,
+    this.sharedWith,
+    this.status
   });
 
   String toString() {
@@ -32,6 +39,15 @@ class AppointmentsModel extends BaseModel {
 
   void setApptTime(String inApptTime) {
     apptTime = inApptTime;
+    notifyListeners();
+  }
+
+  @override
+  void loadData(String inEntityType, dynamic inDatabase) async {
+    print("## ${inEntityType}Model.loadData() overridden");
+    print("## Appointments getAppointments");
+    entityList = await AppointmentsDBWorker.db.getAll();
+    print("## Appointments getAppointments: list = $entityList");
     notifyListeners();
   }
 }
